@@ -44,19 +44,43 @@ class MLP(nn.Module):
         return torch.mean(torch.square((output-dists)/dists))
 
 class PointNetLearner(nn.Module):
-    def __init__(self, h_in, h_out, g_out, final_h_layers = 2, num_h_layers=10, num_g_layers=10, final_mlp = False, activation='relu', aggregation='sum'):
+    def __init__(self, h_in, h_hidden, h_out, g_hidden, g_out, final_h_hidden=10, final_h_out=10,
+                 final_h_layers = 2, num_h_layers=10, num_g_layers=10, final_mlp = False, 
+                 activation='relu', aggregation='sum'):
         super(PointNetLearner, self).__init__()
-        # initial Siamese embedding part
+        # initialize variables
         self.h_out = h_out
         self.g_out = g_out
-        self.h = []
-        self.h.append(nn.Linear(h_in, h_out))
-        for i in range(num_h_layers - 1):
-            self.h.append(nn.Linear(h_out, h_out))
-        self.h = nn.ModuleList(self.h)
+        if num_h_layers <=2:
+            h_hidden=h_out
+        if activation == 'relu':
+            act_func = nn.ReLU
+        else:
+            act_func = nn.Sigmoid
+        
+        # initialize h layer
+        layers = []
+        layers.append(nn.Linear(h_in, h_hidden))
+        for i in range(num_h_layers - 2):
+            layers.append(nn.Linear(h_hidden, h_hidden))
+            layers.append(act_func())
+        layers.append(nn.Linear(h_hidden, h_out))
+        layers.append(act_func())
+        self.h = nn.Sequential(*layers)
+
+        layers = []
+        layers.append(nn.Linear(h_out, final_h_hidden))
+        layers.append(act_func())
+        for i in range(final_h_layers - 2):
+            layers.append(nn.Linear(final_h_hidden, final_h_hidden))
+            layers.append(act_func())
+        layers.append(nn.Linear(final_h_hidden, final_h_out))
+        layers.append(act_func())
+        self.final_h = nn.Sequential(*layers)
+        
         
         # final MLP
-        self.gamma = []
+        layers = []
         self.gamma.append(nn.Linear(h_out, g_out))
         for i in range(num_g_layers - 2):
             self.gamma.append(nn.Linear(g_out, g_out))
@@ -71,11 +95,6 @@ class PointNetLearner(nn.Module):
         else:
             raise Exception("Activation function not implemented")
         
-        layers = []
-        for i in range(final_h_layers):
-            layers.append(nn.Linear(h_out, h_out))
-            layers.append(nn.ReLU())
-        self.final_h = nn.Sequential(*layers)
         self.aggregation = aggregation
 
     

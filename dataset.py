@@ -6,7 +6,6 @@ import time
 import multiprocessing as mp
 from tqdm import tqdm, trange
 import torch
-import cvxpy as cp
 import torch.nn as nn
 from torch.optim import Adam, SGD
 import matplotlib.pyplot as plt
@@ -18,8 +17,8 @@ def load_hdf5_data(filename):
         dataset = h5f['data'][:]
         labels = h5f['label'][:]
     dataset = dataset - np.expand_dims(np.mean(dataset, axis=0), 0)  # center
-    dist = np.max(np.sqrt(np.sum(dataset ** 2, axis=1)), 0)
-    dataset = dataset / dist  # scale
+    # dist = np.max(np.sqrt(np.sum(dataset ** 2, axis=1)), 0)
+    # dataset = dataset / dist  # scale
     print("Data shape:", dataset.shape)
     # organize into dictionary = {label: [sample index 1, sample index 2, .... ]}
     types = np.unique(labels)
@@ -30,54 +29,70 @@ def load_hdf5_data(filename):
         label_dict[labels[i][0]].append(i)
     return dataset, labels, label_dict
 
-def build_comprehensive_sampler(raw_data, label_dict, pairs=10, save_data=False):
+def build_single_cell_data(M1, M2, n=256, pairs=20):
+    Ps = []
+    Qs = []
+    jobs = []
+    pool = mp.Pool(processes=20)
+    p = (1/n) * np.ones(n)
+    q = (1/n) * np.ones(n)
+    for i in range(pairs):
+        P = np.random.choice(M1, size=n)
+        Q = np.random.choice(M2, size=n)
+        mat = ot.dist(P, Q, metric='euclidean')
+        job = pool.apply_async(ot.emd2, args=(p, q, mat))
+        jobs.append(job)
+
+        Ps.append(torch.tensor(P, dtype=torch.float32))
+        Qs.append( torch.tensor(Q, dtype=torch.float32))
+    for job in jobs:
+        job.wait()
+    dists = np.array([job.get() for job in jobs])
+    return Ps, Qs, dists
+
+def build_comprehensive_sampler(raw_data, label_dict, nmin=10, nmax=20, pairs=10, scale=False):
     numsets = raw_data.shape[0]
     numpoints = raw_data.shape[1]
-    dimension = raw_data.shape[2]
     all_labels = list(label_dict.keys())
     # construct p_label
     p_label = []
-    
     for i in all_labels:
         p_label.append(len(label_dict[i])/numsets)
+
     Ps = []
     Qs = []
     dists = []
-    nmin = numpoints//4
-    nmax = numpoints
     jobs = []
     pool = mp.Pool(processes=20)
-    for i in trange(numsets):
-        pindex = i
+    for i in range(pairs):
+        # pick 2 random classes 
+        c1 = np.random.choice(all_labels, p=p_label)
+        c2 = np.random.choice(all_labels, p=p_label)
+
+        # choose 2 random indices
+        pindex = np.random.choice(label_dict[c1])
         P = raw_data[pindex]
+        qindex = np.random.choice(label_dict[c2])
+        Q = raw_data[qindex]
+
         psz = np.random.randint(low=nmin, high=nmax)
         P = P[np.random.randint(low=0, high=numpoints, size=psz)]
-        # sample [pairs] number of labels
-        classes_to_sample = np.random.choice(all_labels, size=pairs, replace=True, p=p_label)
-        for cl in classes_to_sample:
-            qindex = np.random.choice(label_dict[cl])
-            Q = raw_data[qindex]
-            qsz = np.random.randint(low=nmin, high=nmax)
-            Q = Q[np.random.randint(low=0, high=numpoints, size=qsz)]
-            
-            # OT computation
-            mat = ot.dist(P, Q, metric='euclidean')
-            p = (1/psz) * np.ones(psz)
-            q = (1/qsz) * np.ones(qsz)
-            job = pool.apply_async(ot.emd2, args=(p, q, mat))
-            jobs.append(job)
-            #dist = ot.emd2(p, q, mat)
-            
-            # Add to dataset
-            Ps.append(torch.tensor(P, dtype=torch.float32))
-            Qs.append( torch.tensor(Q, dtype=torch.float32))
-            #dists.append(dist)
-    for job in tqdm(jobs):
+
+        qsz = np.random.randint(low=nmin, high=nmax)
+        Q = Q[np.random.randint(low=0, high=numpoints, size=qsz)]
+
+        mat = ot.dist(P, Q, metric='euclidean')
+        p = (1/psz) * np.ones(psz)
+        q = (1/qsz) * np.ones(qsz)
+        job = pool.apply_async(ot.emd2, args=(p, q, mat))
+        jobs.append(job)
+
+        Ps.append(torch.tensor(P, dtype=torch.float32))
+        Qs.append( torch.tensor(Q, dtype=torch.float32))
+    for job in jobs:
         job.wait()
-    dists = [job.get() for job in jobs]
-    if save_data==True:
-        save_name='/data/sam/modelnet/data/train-datasets/pairs-{pairs}'
-        np.savez(save_name, P=Ps, Q=Qs, dists=dists)
+    dists = np.array([job.get() for job in jobs])
+
     return Ps, Qs, dists
 
 def build_multiple_item_dataset(raw_data, items= [1040, 2047], max_pcd = 3000, train=True):
@@ -181,37 +196,109 @@ def build_single_item_dataset(raw_data,item_idx = 300, pairs=500, train=True):
         np.savez(save_name, P=Ps, Q=Qs, dists=dists)
     
     return Ps, Qs, dists
-    
-def build_dataset(raw_data, pairs=1000):
-    numsets = raw_data.shape[0]
-    numpoints = raw_data.shape[1]
-    dimension = raw_data.shape[2]
+
+def fixed_point_set(dim=2, num = 20, data_type='random', low=0.0, high=1.0):
+    if data_type == 'random':
+        points = np.random.uniform(low=0.0, high =1.0, size=(num, 2))
+        return points
+    elif data_type =='grid':
+        coords = []
+        for _ in range(dim):
+            c = np.linspace(0.0, 1.0, num=num)
+            coords.append(c)
+        meshgrid = np.array(np.meshgrid(*coords))
+        grid = []
+        for n in range(num):
+            grid.append(meshgrid[:, n].T)
+        grid = np.vstack(grid)
+        return grid
+    elif data_type == 'circle':
+        points = []
+        for i in range(num):
+            angle = np.pi * np.random.uniform(0, 2)
+            x = 1.0 * np.cos(angle)
+            y = 1.0 * np.sin(angle)
+            points.append([x, y])
+        return np.array(points)
+
+    else:
+        raise NameError('not implemented, choose random, grid, or circle')
+
+def build_dataset(points, nmin=5, nmax=20, pairs=1000):
     Ps = []
     Qs = []
-    dists = []
-    nmin = numpoints-600
-    nmax = numpoints
+    nmin = nmin
+    ntotal = len(points)
+    jobs = []
+    pool = mp.Pool(processes=20)
     
     for i in trange(pairs):
-        # sample random pair of point sets
-        P = raw_data[np.random.randint(low=0, high=numsets)]
-        Q = raw_data[np.random.randint(low=0, high=numsets)]
-        
         # randomly sample points from two given point sets
         psz = np.random.randint(low=nmin, high=nmax)
         qsz = np.random.randint(low=nmin, high=nmax)
-        P = P[np.random.randint(low=0, high=numpoints, size=psz)]
-        Q = Q[np.random.randint(low=0, high=numpoints, size=qsz)]
+        P = points[np.random.randint(low=0, high=ntotal, size=psz)]
+        Q = points[np.random.randint(low=0, high=ntotal, size=qsz)]
         
         # compute OT distance
         mat = ot.dist(P, Q, metric='euclidean')
         p = (1/psz) * np.ones(psz)
         q = (1/qsz) * np.ones(qsz)
-        dist = ot.emd2(p, q, mat)
+        job = pool.apply_async(ot.emd2, args=(p, q, mat))
+        jobs.append(job)
         Ps.append(torch.tensor(P, dtype=torch.float32))
         Qs.append( torch.tensor(Q, dtype=torch.float32))
-        dists.append(dist)
-        
+    for job in tqdm(jobs):
+        job.wait()
+    dists = [job.get() for job in jobs]        
+    return Ps, Qs, dists
+
+def noisy_circle_points(sz, radius, dim=2):
+    points = []
+    for i in range(sz):
+        angle = np.pi * np.random.uniform(0, 2)
+        r = np.random.normal(loc=radius, scale=0.05)
+        if dim == 2:
+            x = r * np.cos(angle)
+            y = r * np.sin(angle)
+            points.append([x, y])
+        else:
+            vec = np.random.normal(loc=0.0, scale=1.0, size=dim)
+            norm = np.linalg.norm(vec, ord=2)
+            if norm < 0.0001:
+                continue
+            vec = radius * (1/np.linalg.norm(vec, ord=2)) * vec
+            points.append(vec)
+    return np.array(points)
+
+def noisy_circles(nmin=5, nmax=20, pairs=1000, dim=2):
+    Ps = []
+    Qs = []
+    nmin = nmin
+    jobs = []
+    pool = mp.Pool(processes=20)
+
+    radii = [1.0, 0.75, 0.5, 0.25]
+    
+    for i in range(pairs):
+        # randomly sample points from two given point sets
+        psz = np.random.randint(low=nmin, high=nmax)
+        qsz = np.random.randint(low=nmin, high=nmax)
+
+        p_radii = np.random.choice(radii)
+        q_radii = np.random.choice(radii)
+        P = noisy_circle_points(psz, p_radii, dim)
+        Q = noisy_circle_points(qsz, q_radii, dim)
+        # compute OT distance
+        mat = ot.dist(P, Q, metric='euclidean')
+        p = (1/psz) * np.ones(psz)
+        q = (1/qsz) * np.ones(qsz)
+        job = pool.apply_async(ot.emd2, args=(p, q, mat))
+        jobs.append(job)
+        Ps.append(torch.tensor(P, dtype=torch.float32))
+        Qs.append( torch.tensor(Q, dtype=torch.float32))
+    for job in jobs:
+        job.wait()
+    dists = [job.get() for job in jobs]
     return Ps, Qs, dists
 
 class PointNetDataloader:
