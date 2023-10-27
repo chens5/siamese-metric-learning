@@ -4,6 +4,7 @@ import itertools
 import numpy as np
 import random
 from dataset import *
+import os
 
 parser = argparse.ArgumentParser(description='construct datasets')
 parser.add_argument('--dataset-name', type=str)
@@ -23,14 +24,18 @@ RANDOM_2D = ['synthetic-random',
              'circle', 
              'ncircle',
              'ncircle/large', 
+             'ncircle/w2',
              'grid', 
-             'ncircle/dim6', 
+             'ncircle/dim6',
+             'ncircle/dim6/w2', 
              'ncircle/dim10', 
              'ncircle/dim14']
 
-SINGLE_CELL = ['rna-atac']
+SINGLE_CELL = ['rna-atac', 'rna-atac/w2']
 
-MNET = ['modelnet']
+HIGHDIM=['rna', 'rna/w2', 'rna-2k', 'rna-2k/w2']
+
+MNET = ['modelnet', 'modelnet/w2']
 
 if args.dataset_name in RANDOM_2D:
     if args.dataset_name == 'grid':
@@ -46,11 +51,13 @@ if args.dataset_name in RANDOM_2D:
         Ps, Qs, dists = noisy_circles(nmin=args.nmin, 
                                       nmax=args.nmax, 
                                       pairs=args.train_sz,
-                                      dim=dim)
+                                      dim=dim,
+                                      order=2)
         Ps_val, Qs_val, dists_val = noisy_circles(nmin=args.nmin, 
                                                   nmax=args.nmax, 
                                                   pairs=args.val_sz,
-                                                  dim=dim)
+                                                  dim=dim,
+                                                  order = 2)
     else:
         pointset = fixed_point_set(dim=2, num=n, data_type=args.dataset_name)
         Ps, Qs, dists = build_dataset(pointset, 
@@ -69,7 +76,9 @@ elif args.dataset_name in MNET:
                                                 label_dict, 
                                                 nmin=args.nmin, 
                                                 nmax=args.nmax, 
-                                                pairs=args.train_sz + args.val_sz)
+                                                pairs=args.train_sz + args.val_sz,
+                                                order=2)
+    print(len(Ps), len(Qs))
     Ps_val, Qs_val, dists_val = Ps[args.train_sz: args.train_sz + args.val_sz], Qs[args.train_sz: args.train_sz + args.val_sz], dists[args.train_sz: args.train_sz + args.val_sz]
     # raw_data, labels, label_dict = load_hdf5_data('/data/sam/modelnet/data/ply_data_test1.h5')
     # Ps_val, Qs_val, dists_val = build_comprehensive_sampler(raw_data, 
@@ -94,20 +103,39 @@ elif args.dataset_name in SINGLE_CELL:
     Ps, Qs, dists = build_dataset(pointset, 
                                     nmin=256, 
                                     nmax=257, 
-                                    pairs=args.train_sz)
+                                    pairs=args.train_sz,
+                                    order=2)
     Ps_val, Qs_val, dists_val = build_dataset(pointset, 
                                                 nmin=256, 
                                                 nmax=257, 
-                                                pairs=args.val_sz)
+                                                pairs=args.val_sz,
+                                                order=2)
 
     # Ps, Qs, dists = build_single_cell_data(M1, M2, n=256, pairs=args.train_sz + args.val_sz)
     # Ps_val, Qs_val, dists_val = Ps[args.train_sz: args.train_sz + args.val_sz], Qs[args.train_sz: args.train_sz + args.val_sz], dists[args.train_sz: args.train_sz + args.val_sz]
-    
-train_sf = '/data/sam/{}/data/train-nmax-{}-nmin-{}-sz-{}'.format(args.dataset_name, 
+elif args.dataset_name in HIGHDIM:
+    pointset = np.load('/data/sam/rna/data/vectors.npy')
+    print(pointset.shape)
+    Ps, Qs, dists = build_dataset(pointset, 
+                                    nmin=20, 
+                                    nmax=200, 
+                                    pairs=args.train_sz,
+                                    order=2)
+    Ps_val, Qs_val, dists_val = build_dataset(pointset, 
+                                                nmin=20, 
+                                                nmax=200, 
+                                                pairs=args.val_sz,
+                                                order = 2)
+
+
+top_lvl = '/data/sam/{}/data'.format(args.dataset_name)
+if not os.path.exists(top_lvl):
+    os.makedirs(top_lvl)
+train_sf = '/data/sam/{}/data/train-nmax-{}-nmin-{}-sz-{}-1'.format(args.dataset_name, 
                                                                   args.nmax, 
                                                                   args.nmin, 
                                                                   args.train_sz)
-val_sf = '/data/sam/{}/data/val-nmax-{}-nmin-{}-sz-{}'.format(args.dataset_name, 
+val_sf = '/data/sam/{}/data/val-nmax-{}-nmin-{}-sz-{}-1'.format(args.dataset_name, 
                                                               args.nmax, 
                                                               args.nmin, 
                                                               args.val_sz)

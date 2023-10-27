@@ -16,6 +16,7 @@ import geomloss
 from torch.utils.tensorboard import SummaryWriter
 import json
 import csv
+import os
 
 
 MSELOSS = nn.MSELoss(reduction='mean')
@@ -33,7 +34,15 @@ POINTS = ['synthetic-random',
           'ncircle/dim6', 
           'ncircle/dim10', 
           'ncircle/dim14',
-          'rna-atac']
+          'rna-atac', 
+          'modelnet/w2',
+          'ncircle/w2',
+          'ncircle/dim6/w2', 
+          'rna', 
+          'rna/w2',
+          'rna-2k',
+          'rna-2k/w2', 
+          'rna-atac/w2']
 
 def construct_random_point_dataset(dimension=2, nmin=5, nmax=20, numdist=20, nprocesses = 20):
     Ps = []
@@ -83,7 +92,7 @@ def train_point_autoencoder(dataset : EMDPairDataset, dimension: int, initial: d
                             phi: dict, device: str, lr, name: str, val_dataset=None,
                             iterations=200, num_decoding=20, batch_size=64, enc=False, lam=0.1, tr=1):
     embedding_size = phi['output']
-    encoder = PointEncoder(dimension, initial, phi, activation='lrelu', max=True)
+    encoder = PointEncoder(dimension, initial, phi, activation='lrelu')
     if enc:
         model = encoder
     else:
@@ -99,7 +108,7 @@ def train_point_autoencoder(dataset : EMDPairDataset, dimension: int, initial: d
         optimizer.zero_grad()
         epoch_loss = 0
 
-        for i in range(len(dataset)):
+        for i in trange(len(dataset)):
             input1 = dataset[i][0].type(torch.float32).to(device)
             input2 = dataset[i][1].type(torch.float32).to(device)
             yval = dataset[i][2].type(torch.float32).to(device)
@@ -125,6 +134,8 @@ def train_point_autoencoder(dataset : EMDPairDataset, dimension: int, initial: d
         
         epoch_losses.append(epoch_loss)
         writer.add_scalar('Loss/train', epoch_loss, epoch)
+        #print(validation_loss(val_dataset, model, device))
+
         # if enc:
         #     val_loss = validation_loss(val_dataset, model, device)
         # else:
@@ -193,6 +204,8 @@ def train_image_autoencoder(dataloader: DataLoader, sz: int,
 def validation_loss(val_dataset: EMDPairDataset, model: AutoEncoder, device: str):
     total_loss = 0
     count = 0
+    losses = []
+    preds = []
     for i in range(len(val_dataset)):
         input1 = val_dataset[i][0].type(torch.float32).to(device)
         #input1 = torch.unsqueeze(input1, dim=0)
@@ -203,11 +216,13 @@ def validation_loss(val_dataset: EMDPairDataset, model: AutoEncoder, device: str
         feat1 = model(input1)
         feat2 = model(input2)
         l2_diff = torch.linalg.vector_norm(feat1 - feat2)
+        preds.append(l2_diff.detach().item())
         if yval > 0.0:
             loss = torch.sum(torch.abs(l2_diff - yval)/yval)
-            total_loss += loss.detach()
+            losses.append(loss.detach().item())
             count += 1
-    return total_loss/count
+    print(preds[:10], val_dataset.emds[:10])
+    return np.mean(losses), np.std(losses)
 
 # reads in a json parameter file
 # Format: {modelname: {dimension: , initial: , phi: , rho: }}
@@ -284,14 +299,20 @@ def main():
                 torch.save(model.state_dict(), f=model_name)
 
     if args.dataset_name in POINTS:
-        train_sf = '/data/sam/{}/data/train-nmax-{}-nmin-{}-sz-{}.npz'.format(args.dataset_name, 
+        if not os.path.exists('/data/sam/{}/models/encoder'.format(args.dataset_name)):
+            os.makedirs('/data/sam/{}/models/encoder'.format(args.dataset_name))
+        if not os.path.exists('/data/sam/{}/models/autoencoder'.format(args.dataset_name)):
+            os.makedirs('/data/sam/{}/models/autoencoder'.format(args.dataset_name))
+
+        train_sf = '/data/sam/{}/data/train-nmax-{}-nmin-{}-sz-{}-1.npz'.format(args.dataset_name, 
                                                                           args.train_ds[0], 
                                                                           args.train_ds[1], 
                                                                           args.train_ds[2])
-        val_sf = '/data/sam/{}/data/val-nmax-{}-nmin-{}-sz-{}.npz'.format(args.dataset_name, 
+        val_sf = '/data/sam/{}/data/val-nmax-{}-nmin-{}-sz-{}-1.npz'.format(args.dataset_name, 
                                                                       args.val_ds[0], 
                                                                       args.val_ds[1], 
                                                                       args.val_ds[2])
+        print(val_sf)
                 
         train_data = np.load(train_sf, allow_pickle=True)
         Ps = train_data['Ps']
@@ -342,19 +363,21 @@ def main():
                     val_loss = validation_loss(val_dataset, model, args.device)
                 else:
                     val_loss = validation_loss(val_dataset, model.encoder, args.device)
-                print("model name:", modelname, "Validation loss:", val_loss.item())
+                
                 writer.writerow({'init_hidden': initial['hidden'], 
                                  'init_output': initial['output'],
                                  'init_layers': initial['layers'],
                                  'phi_hidden': phi['hidden'],
                                  'phi_output': phi['output'],
                                  'phi_layers': phi['layers'],
-                                 'epoch': epoch,
-                                 'validation_loss': val_loss.item()})
+                                 'epoch': epoch})
                 if args.enc:
                     save_file = '/data/sam/{data}/models/encoder/{name}-lrelu.pt'.format(data=args.dataset_name, name=modelname)
+                    
                 else:
-                    save_file = '/data/sam/{data}/models/autoencoder/{name}-max.pt'.format(data=args.dataset_name, name=modelname)
+                    save_file = '/data/sam/{data}/models/autoencoder/{name}-lrelu.pt'.format(data=args.dataset_name, name=modelname)
+                print("model name:", modelname, "Validation loss:", val_loss)
+                print("SAVE FILE:", save_file)
                 torch.save(model.state_dict(), f=save_file)
 
     return 0

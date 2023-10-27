@@ -18,6 +18,7 @@ from dataset import *
 #from train_autoencoder import *
 from torch.utils.tensorboard import SummaryWriter
 
+import os
 #from train_autoencoder import construct_image_dataset
 
 MSELOSS = nn.MSELoss(reduction='mean')
@@ -37,18 +38,29 @@ POINT_DATASETS = ['synthetic-uniform',
                   'ncircle/dim6', 
                   'ncircle/dim10', 
                   'ncircle/dim14', 
-                  'rna-atac']
+                  'rna-atac',
+                  'modelnet/w2',
+                  'ncircle/w2',
+                  'ncircle/dim6/w2',
+                  'rna',
+                  'rna/w2',
+                  'rna-2k',
+                  'rna-2k/w2', 
+                  'rna-atac/w2']
 
 def train_point_productnet(dataset : EMDPairDataset, dimension: int, initial: dict, 
                             phi: dict, rho: dict, device: str, lr, name: str,
                             activation='relu', mean=False, iterations=200, 
                             batch_size=64, val_dataset=None):
     embedding_size = phi['output']
+    
     encoder = PointEncoder(dimension, initial, phi, bn=False, mean=mean, activation=activation)
     final = initialize_mlp(embedding_size, rho['hidden'], 1, rho['layers'], activation=activation)
     model = ProductNet(encoder, None, final, image=False)
     model.to(device)
-
+    print(encoder)
+    print(final)
+    
     optimizer = Adam(model.parameters(), lr=lr)
     if mean:
         writer = SummaryWriter(log_dir='runs/modelnet/pnet/{name}-mean'.format(name=name))
@@ -58,12 +70,21 @@ def train_point_productnet(dataset : EMDPairDataset, dimension: int, initial: di
     for epoch in trange(iterations):
         optimizer.zero_grad()
         epoch_loss = 0
-        for i in range(len(dataset)):
-            # input1 = dataset[i][0].type(torch.float32).to(device)
-            # input2 = dataset[i][1].type(torch.float32).to(device)
+        for i in trange(len(dataset)):
+            input1 = dataset[i][0].type(torch.float32).to(device)
+            input2 = dataset[i][1].type(torch.float32).to(device)
+
+            # n = dataset[i][0].size()[0]
+            # m = dataset[i][1].size()[0]
+            # vec1 = torch.unsqueeze(torch.ones(n)/n, 1)
+            # vec2 = torch.unsqueeze(torch.ones(m)/m, 1)
+            # vec1 = vec1.to(device)
+            # input1 = torch.hstack((dataset[i][0], vec1))
+            # vec2 = vec2.to(device)
+            # input2 = torch.hstack((dataset[i][1], vec2))
             yval = dataset[i][2].type(torch.float32).to(device)
-            input1 = dataset[i][0]
-            input2 = dataset[i][1]
+            # input1 = dataset[i][0]
+            # input2 = dataset[i][1]
             #yval = dataset[i][2]
 
             pred, feat1, feat2 = model(input1, input2)
@@ -168,11 +189,21 @@ def train(dataloader: DataLoader, sz: int, embedding_size: int,
 
 
 def validation_loss(val_dataset: EMDPairDataset, model: AutoEncoder, device: str, image=False):
-    total_loss = 0
+    total_loss = []
     count = 0
     for i in range(len(val_dataset)):
-        input1 = val_dataset[i][0].type(torch.float32).to(device)
-        input2 = val_dataset[i][1].type(torch.float32).to(device)
+        # n = val_dataset[i][0].size()[0]
+        # m = val_dataset[i][1].size()[0]
+        # vec1 = torch.unsqueeze(torch.ones(n)/n, 1)
+        # vec2 = torch.unsqueeze(torch.ones(m)/m, 1)
+        # vec1 = vec1.to(device)
+        # input1 = torch.hstack((val_dataset[i][0].to(device), vec1))
+        # vec2 = vec2.to(device)
+        # input2 = torch.hstack((val_dataset[i][1].to(device), vec2))
+        # input1 = input1.to(device)
+        # input2 = input2.to(device)
+        input1 = val_dataset[i][0].to(device)
+        input2 = val_dataset[i][1].to(device)
         if image:
             input1 = torch.unsqueeze(input1, dim=0)
             input2 = torch.unsqueeze(input2, dim=0)
@@ -180,9 +211,9 @@ def validation_loss(val_dataset: EMDPairDataset, model: AutoEncoder, device: str
         pred, _, _ = model(input1, input2)
         if yval > 0.0:
             loss = torch.sum(torch.abs(pred - yval)/yval)
-            total_loss += loss.detach()
+            total_loss.append(loss.detach().item())
             count += 1
-    return total_loss/count
+    return np.mean(total_loss), np.std(total_loss)
 
 
 # reads in a json parameter file
@@ -213,8 +244,10 @@ def main():
 
 
     args = parser.parse_args()
+    print("parsed args")
 
     parameters = read_parameter_file(args.parameter_file)
+    print("parsed parameters")
 
     if args.dataset_name in IMAGE_DATASETS:
 
@@ -276,6 +309,10 @@ def main():
                                                                             ) 
                 torch.save(model.state_dict(), f=model_name)
     elif args.dataset_name in POINT_DATASETS:
+        print("Using mean agg:", args.mean)
+        if not os.path.exists('/data/sam/{}/models/productnet'.format(args.dataset_name)):
+            os.makedirs('/data/sam/{}/models/productnet'.format(args.dataset_name))
+
         train_sf = '/data/sam/{}/data/train-nmax-{}-nmin-{}-sz-{}.npz'.format(args.dataset_name, 
                                                                           args.train_ds[0], 
                                                                           args.train_ds[1], 
@@ -284,7 +321,7 @@ def main():
                                                                       args.val_ds[0], 
                                                                       args.val_ds[1], 
                                                                       args.val_ds[2])
-        print(val_sf)
+        print("validation set", val_sf)
         train_data = np.load(train_sf, allow_pickle=True)
         Ps = train_data['Ps']
         Qs = train_data['Qs']
@@ -293,15 +330,17 @@ def main():
         Ps_val = val_data['Ps']
         Qs_val = val_data['Qs']
         dists_val = val_data['dists']
-        for i in range(len(dists)):
+        for i in trange(len(dists)):
             Ps[i] = Ps[i].type(torch.float32).to(args.device)
             Qs[i] = Qs[i].type(torch.float32).to(args.device)
+        print("loaded all datasets to device:", args.device)
         train_dataset = EMDPairDataset(Ps, Qs, torch.tensor(dists))
         val_dataset = EMDPairDataset(Ps_val, Qs_val, dists_val)
+        print("size of train_dataset", len(train_dataset))
         if args.mean:
             output_name = 'output/{}/productnet-{}-mean.csv'.format(args.dataset_name, args.activation)
         else:
-            output_name = 'output/{}/productnet-{}.csv'.format(args.dataset_name, args.activation)
+            output_name = 'output/{}/productnet-{}-single.csv'.format(args.dataset_name, args.activation)
         with open(output_name, 'w', newline='') as csvfile:
             fieldnames = ['init_hidden', 
                           'init_output', 
@@ -336,7 +375,7 @@ def main():
                                                 mean=args.mean,
                                                 activation=args.activation)
                 val_loss = validation_loss(val_dataset, model, args.device, image=False)
-                print("model name:", modelname, "Validation loss:", val_loss.item(), '\n')
+                print("model name:", modelname, "Validation loss:", val_loss, '\n')
                 writer.writerow({'init_hidden': initial['hidden'], 
                                  'init_output': initial['output'],
                                  'init_layers': initial['layers'],
@@ -346,13 +385,13 @@ def main():
                                  'rho_hidden':rho['hidden'],
                                  'rho_layers': rho['layers'],
                                  'epochs': epochs_trained,
-                                 'validation_loss': val_loss.item()})
+                                 'validation_loss': val_loss[0]})
                 if args.mean:
                     save_file = '/data/sam/{data}/models/productnet/{name}-{act}-mean.pt'.format(data=args.dataset_name,
                                                                              name=modelname,
                                                                              act=args.activation)
                 else:
-                    save_file = '/data/sam/{data}/models/productnet/{name}-{act}.pt'.format(data=args.dataset_name,
+                    save_file = '/data/sam/{data}/models/productnet/{name}-{act}-exp.pt'.format(data=args.dataset_name,
                                                                                 name=modelname,
                                                                                 act=args.activation)
                 print("saved model in:", save_file)

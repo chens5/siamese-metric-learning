@@ -50,7 +50,7 @@ def build_single_cell_data(M1, M2, n=256, pairs=20):
     dists = np.array([job.get() for job in jobs])
     return Ps, Qs, dists
 
-def build_comprehensive_sampler(raw_data, label_dict, nmin=10, nmax=20, pairs=10, scale=False):
+def build_comprehensive_sampler(raw_data, label_dict, nmin=10, nmax=20, pairs=10, scale=False, order=1):
     numsets = raw_data.shape[0]
     numpoints = raw_data.shape[1]
     all_labels = list(label_dict.keys())
@@ -64,7 +64,7 @@ def build_comprehensive_sampler(raw_data, label_dict, nmin=10, nmax=20, pairs=10
     dists = []
     jobs = []
     pool = mp.Pool(processes=20)
-    for i in range(pairs):
+    for i in trange(pairs):
         # pick 2 random classes 
         c1 = np.random.choice(all_labels, p=p_label)
         c2 = np.random.choice(all_labels, p=p_label)
@@ -81,7 +81,7 @@ def build_comprehensive_sampler(raw_data, label_dict, nmin=10, nmax=20, pairs=10
         qsz = np.random.randint(low=nmin, high=nmax)
         Q = Q[np.random.randint(low=0, high=numpoints, size=qsz)]
 
-        mat = ot.dist(P, Q, metric='euclidean')
+        mat = np.power(ot.dist(P, Q, metric='euclidean'), order)
         p = (1/psz) * np.ones(psz)
         q = (1/qsz) * np.ones(qsz)
         job = pool.apply_async(ot.emd2, args=(p, q, mat))
@@ -92,7 +92,7 @@ def build_comprehensive_sampler(raw_data, label_dict, nmin=10, nmax=20, pairs=10
     for job in jobs:
         job.wait()
     dists = np.array([job.get() for job in jobs])
-
+    dists = np.power(dists, 1/order)
     return Ps, Qs, dists
 
 def build_multiple_item_dataset(raw_data, items= [1040, 2047], max_pcd = 3000, train=True):
@@ -224,7 +224,7 @@ def fixed_point_set(dim=2, num = 20, data_type='random', low=0.0, high=1.0):
     else:
         raise NameError('not implemented, choose random, grid, or circle')
 
-def build_dataset(points, nmin=5, nmax=20, pairs=1000):
+def build_dataset(points, nmin=5, nmax=20, pairs=1000, order=1):
     Ps = []
     Qs = []
     nmin = nmin
@@ -240,7 +240,7 @@ def build_dataset(points, nmin=5, nmax=20, pairs=1000):
         Q = points[np.random.randint(low=0, high=ntotal, size=qsz)]
         
         # compute OT distance
-        mat = ot.dist(P, Q, metric='euclidean')
+        mat = np.power(ot.dist(P, Q, metric='euclidean'), order)
         p = (1/psz) * np.ones(psz)
         q = (1/qsz) * np.ones(qsz)
         job = pool.apply_async(ot.emd2, args=(p, q, mat))
@@ -249,7 +249,8 @@ def build_dataset(points, nmin=5, nmax=20, pairs=1000):
         Qs.append( torch.tensor(Q, dtype=torch.float32))
     for job in tqdm(jobs):
         job.wait()
-    dists = [job.get() for job in jobs]        
+    dists = np.array([job.get() for job in jobs])
+    dists = np.power(dists, 1/order)
     return Ps, Qs, dists
 
 def noisy_circle_points(sz, radius, dim=2):
@@ -270,7 +271,7 @@ def noisy_circle_points(sz, radius, dim=2):
             points.append(vec)
     return np.array(points)
 
-def noisy_circles(nmin=5, nmax=20, pairs=1000, dim=2):
+def noisy_circles(nmin=5, nmax=20, pairs=1000, dim=2, order=1):
     Ps = []
     Qs = []
     nmin = nmin
@@ -289,7 +290,8 @@ def noisy_circles(nmin=5, nmax=20, pairs=1000, dim=2):
         P = noisy_circle_points(psz, p_radii, dim)
         Q = noisy_circle_points(qsz, q_radii, dim)
         # compute OT distance
-        mat = ot.dist(P, Q, metric='euclidean')
+        mat = np.power(ot.dist(P, Q, metric='euclidean'), order)
+
         p = (1/psz) * np.ones(psz)
         q = (1/qsz) * np.ones(qsz)
         job = pool.apply_async(ot.emd2, args=(p, q, mat))
@@ -298,7 +300,7 @@ def noisy_circles(nmin=5, nmax=20, pairs=1000, dim=2):
         Qs.append( torch.tensor(Q, dtype=torch.float32))
     for job in jobs:
         job.wait()
-    dists = [job.get() for job in jobs]
+    dists = np.power(np.array([job.get() for job in jobs]), 1/order)
     return Ps, Qs, dists
 
 class PointNetDataloader:
