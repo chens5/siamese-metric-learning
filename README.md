@@ -7,3 +7,7 @@ The autoencoder_model.py file contains all models: WPCE, Siamese DeepSets (under
 We include the hyperparameter configurations we used in our paper. To generate your own hyperparameters, use the parameters.py script
 To train WPCE or Siamese DeepSets, use the train_autoencoder.py script.
 To train ProductNet, use the train_productnet.py script
+
+
+### Contact
+Contact Samantha Chen (sac003@ucsd.edu) with questions
